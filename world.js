@@ -423,30 +423,39 @@ export class World {
   }
 
   placeHouse(position, yaw = 0, free = false) {
-    const mesh = this._createHouseTier(1);
-    mesh.position.copy(position);
-    mesh.rotation.y = yaw;
-    this.scene.add(mesh);
-    this.collidables.push(mesh);
+    const { group, wallSegments } = this._createHouseTier(1);
+    group.position.copy(position);
+    group.rotation.y = yaw;
+    this.scene.add(group);
+    for (const seg of wallSegments) this.collidables.push(seg);
 
-    const building = { type: 'house', tier: 1, mesh, position: position.clone(), yaw, free };
+    const doorLocal = new THREE.Vector3(0, 1, group.userData.size / 2 + 0.05);
+    const building = {
+      type: 'house', tier: 1, mesh: group, wallSegments,
+      position: position.clone(), yaw, free,
+      doorLocalZ: group.userData.size / 2,
+    };
     this.buildings.push(building);
     return building;
   }
 
   upgradeHouse(building) {
     if (building.tier >= 3) return false;
-    const idx = this.collidables.indexOf(building.mesh);
+    for (const seg of building.wallSegments) {
+      const idx = this.collidables.indexOf(seg);
+      if (idx !== -1) this.collidables.splice(idx, 1);
+    }
     this.scene.remove(building.mesh);
-    if (idx !== -1) this.collidables.splice(idx, 1);
 
     building.tier += 1;
-    const mesh = this._createHouseTier(building.tier);
-    mesh.position.copy(building.position);
-    mesh.rotation.y = building.yaw;
-    this.scene.add(mesh);
-    this.collidables.push(mesh);
-    building.mesh = mesh;
+    const { group, wallSegments } = this._createHouseTier(building.tier);
+    group.position.copy(building.position);
+    group.rotation.y = building.yaw;
+    this.scene.add(group);
+    for (const seg of wallSegments) this.collidables.push(seg);
+    building.mesh = group;
+    building.wallSegments = wallSegments;
+    building.doorLocalZ = group.userData.size / 2;
     return true;
   }
 
@@ -464,51 +473,123 @@ export class World {
     return nearest;
   }
 
+  /** Returns the nearest house door's world position and facing yaw, or null.
+   *  Used to show the "Press O to open" prompt only when actually near a door. */
+  getNearestHouseDoor(position, maxDist = 3.5) {
+    let nearest = null;
+    let nearestDist = maxDist;
+    for (const b of this.buildings) {
+      if (b.type !== 'house') continue;
+      const doorWorld = new THREE.Vector3(0, 0, b.doorLocalZ)
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), b.yaw)
+        .add(b.position);
+      const d = position.distanceTo(doorWorld);
+      if (d < nearestDist) {
+        nearest = b;
+        nearestDist = d;
+      }
+    }
+    return nearest;
+  }
+
   _createHouseTier(tier) {
     const group = new THREE.Group();
     const wallMat = new THREE.MeshStandardMaterial({ color: tier >= 3 ? 0xb0b0ad : 0xc9a06a, roughness: 1 });
     const roofMat = new THREE.MeshStandardMaterial({ color: 0x8a3f2e, roughness: 1 });
     const trimMat = new THREE.MeshStandardMaterial({ color: 0x7a7a76, roughness: 1 });
+    const floorMat2 = new THREE.MeshStandardMaterial({ color: 0x6b4f30, roughness: 1 });
 
     const size = 6 + (tier - 1) * 1.5;
     const wallHeight = 3 + (tier - 1) * 0.4;
+    const wallThickness = 0.3;
+    const doorWidth = 1.4;
+    const doorHeight = 2.1;
 
-    const base = new THREE.Mesh(new THREE.BoxGeometry(size, wallHeight, size), wallMat);
-    base.position.y = wallHeight / 2;
-    base.castShadow = true;
-    base.receiveShadow = true;
-    group.add(base);
+    const wallSegments = [];
 
+    // Interior floor so it doesn't look hollow from inside
+    const innerFloor = new THREE.Mesh(new THREE.BoxGeometry(size, 0.1, size), floorMat2);
+    innerFloor.position.y = 0.05;
+    innerFloor.receiveShadow = true;
+    group.add(innerFloor);
+
+    // Back wall (solid, opposite the door)
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(size, wallHeight, wallThickness), wallMat);
+    backWall.position.set(0, wallHeight / 2, -size / 2 + wallThickness / 2);
+    backWall.castShadow = true;
+    backWall.receiveShadow = true;
+    group.add(backWall);
+    wallSegments.push(backWall);
+
+    // Left wall
+    const sideWall1 = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, wallHeight, size), wallMat);
+    sideWall1.position.set(-size / 2 + wallThickness / 2, wallHeight / 2, 0);
+    sideWall1.castShadow = true;
+    sideWall1.receiveShadow = true;
+    group.add(sideWall1);
+    wallSegments.push(sideWall1);
+
+    // Right wall
+    const sideWall2 = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, wallHeight, size), wallMat);
+    sideWall2.position.set(size / 2 - wallThickness / 2, wallHeight / 2, 0);
+    sideWall2.castShadow = true;
+    sideWall2.receiveShadow = true;
+    group.add(sideWall2);
+    wallSegments.push(sideWall2);
+
+    // Front wall, split into two segments flanking a door gap
+    const frontSegWidth = (size - doorWidth) / 2;
+    const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(frontSegWidth, wallHeight, wallThickness), wallMat);
+    frontLeft.position.set(-(doorWidth / 2 + frontSegWidth / 2), wallHeight / 2, size / 2 - wallThickness / 2);
+    frontLeft.castShadow = true;
+    frontLeft.receiveShadow = true;
+    group.add(frontLeft);
+    wallSegments.push(frontLeft);
+
+    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(frontSegWidth, wallHeight, wallThickness), wallMat);
+    frontRight.position.set(doorWidth / 2 + frontSegWidth / 2, wallHeight / 2, size / 2 - wallThickness / 2);
+    frontRight.castShadow = true;
+    frontRight.receiveShadow = true;
+    group.add(frontRight);
+    wallSegments.push(frontRight);
+
+    // Lintel above the door opening so the wall line reads as continuous
+    const lintelHeight = wallHeight - doorHeight;
+    if (lintelHeight > 0.1) {
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, lintelHeight, wallThickness), wallMat);
+      lintel.position.set(0, doorHeight + lintelHeight / 2, size / 2 - wallThickness / 2);
+      lintel.castShadow = true;
+      group.add(lintel);
+      wallSegments.push(lintel);
+    }
+
+    // Roof
     const roof = new THREE.Mesh(new THREE.ConeGeometry(size * 0.8, 2.5, 4), roofMat);
     roof.position.y = wallHeight + 1.25;
     roof.rotation.y = Math.PI / 4;
     roof.castShadow = true;
     group.add(roof);
 
+    // Door leaf (visual only, does not block movement — the gap is walkable)
     const door = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 2, 0.15),
+      new THREE.BoxGeometry(doorWidth * 0.9, doorHeight, 0.08),
       new THREE.MeshStandardMaterial({ color: 0x4a2c17, roughness: 1 })
     );
-    door.position.set(0, 1, size / 2 + 0.05);
+    door.position.set(0, doorHeight / 2, size / 2 + 0.35);
+    door.rotation.y = Math.PI / 2.6; // slightly ajar, out of the walkway
     group.add(door);
 
     if (tier >= 2) {
-      const floor = new THREE.Mesh(
+      const deck = new THREE.Mesh(
         new THREE.BoxGeometry(size + 2, 0.2, size + 2),
         new THREE.MeshStandardMaterial({ color: 0x8a6339, roughness: 1 })
       );
-      floor.position.y = 0.1;
-      floor.receiveShadow = true;
-      group.add(floor);
+      deck.position.y = -0.05;
+      deck.receiveShadow = true;
+      group.add(deck);
     }
 
     if (tier >= 3) {
-      const trim = new THREE.Mesh(new THREE.BoxGeometry(size + 0.4, 0.6, size + 0.4), trimMat);
-      trim.position.y = 0.3;
-      trim.castShadow = true;
-      trim.receiveShadow = true;
-      group.add(trim);
-
       const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.6, 8), trimMat);
       chimney.position.set(size * 0.25, wallHeight + 1.8, size * 0.25);
       group.add(chimney);
@@ -516,7 +597,8 @@ export class World {
 
     group.userData.buildingType = 'house';
     group.userData.tier = tier;
-    return group;
+    group.userData.size = size;
+    return { group, wallSegments };
   }
 
   // ---------- Campfire (for cooking raw meat) ----------
