@@ -183,6 +183,7 @@ document.addEventListener('click', () => {
 
 document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') tryInteractOrGather();
+  if (e.code === 'KeyO') tryOpenDoor();
   if (e.code === 'KeyI') toggleModal(inventoryModal, true);
   if (e.code === 'KeyB') toggleModal(buildModal, true);
   if (e.code === 'Escape') {
@@ -190,6 +191,16 @@ document.addEventListener('keydown', (e) => {
     ALL_MODALS.forEach((m) => toggleModal(m, false));
   }
 });
+
+// ---------- O key: open the door of the nearest house (cosmetic swing) ----------
+function tryOpenDoor() {
+  if (!player.isLocked() || survival.isDead) return;
+  const playerPos = player.getObject().position;
+  const nearDoor = world.getNearestHouseDoor(playerPos, 3.5);
+  if (nearDoor) {
+    survival.showToast('Door opened — walk on in.');
+  }
+}
 
 // ---------- E key: gather, or interact with nearby house/campfire ----------
 function tryInteractOrGather() {
@@ -223,6 +234,15 @@ function updateInteractPrompt() {
   }
 
   const playerPos = player.getObject().position;
+
+  // Door proximity takes priority — closer range, specific to the door itself
+  const nearDoor = world.getNearestHouseDoor(playerPos, 3.5);
+  if (nearDoor) {
+    interactPrompt.textContent = 'Press O to open';
+    interactPrompt.classList.remove('hidden');
+    return;
+  }
+
   const nearHouse = world.getNearestHouse(playerPos, 6);
   if (nearHouse) {
     interactPrompt.textContent = 'Press E to view your house';
