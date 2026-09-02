@@ -205,21 +205,32 @@ export class Player {
     return this.isSprinting;
   }
 
-  _collidesAt(x, z) {
+    _collidesAt(x, z) {
     const collidables = this.world.collidables;
     if (!collidables || collidables.length === 0) return false;
 
     for (const obj of collidables) {
       if (obj.userData._collisionRadius === undefined) {
-        // Cache a horizontal collision radius per object, computed once from its bounding box
         const box = new THREE.Box3().setFromObject(obj);
         const size = new THREE.Vector3();
         box.getSize(size);
-        // Use the larger of (half the diagonal footprint) so rotated/offset
-        // objects are never under-covered, with a sane minimum so nothing
-        // ever gets a zero/near-zero radius (which would let the player pass through).
-        const halfDiagonal = Math.sqrt(size.x * size.x + size.z * size.z) * 0.5;
-        obj.userData._collisionRadius = Math.max(halfDiagonal, 0.5);
+
+        // Trees/rocks/bushes should only block on their trunk/base width,
+        // not their full leafy canopy — use a trunk-scale radius for small
+        // resource props, and the full footprint only for large structures
+        // like houses/campfires.
+        const isLargeStructure = obj.userData.buildingType === 'house'
+          || obj.userData.buildingType === 'campfire';
+
+        let radius;
+        if (isLargeStructure) {
+          radius = Math.sqrt(size.x * size.x + size.z * size.z) * 0.5;
+        } else {
+          // Use average of x/z (not diagonal) and shrink further — trunk-width collision
+          radius = Math.max((size.x + size.z) / 4, 0.35) * 0.6;
+        }
+
+        obj.userData._collisionRadius = Math.max(radius, 0.35);
       }
       const r = obj.userData._collisionRadius + this.radius;
       const dx = x - obj.position.x;
